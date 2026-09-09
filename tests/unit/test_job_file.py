@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -226,7 +227,7 @@ def test_write(fixture_get_platform):
         )
     ], ids=["1", "2", "3", "4"])
 def test_write_directives(fixture_get_platform, job_conf: dict, expected: str):
-    """"Test the directives section of job script file is correctly
+    """Test the directives section of job script file is correctly
         written"""
     with io.StringIO() as fake_file:
         JobFileWriter()._write_directives(fake_file, job_conf)

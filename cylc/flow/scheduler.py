@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -78,6 +79,7 @@ from cylc.flow.exceptions import (
     CommandFailedError,
     CylcError,
     InputError,
+    WorkflowConfigError,
 )
 import cylc.flow.flags
 from cylc.flow.flow_mgr import (
@@ -108,6 +110,7 @@ from cylc.flow.loggingutil import (
     get_sorted_logs_by_time,
     patch_log_level,
 )
+from cylc.flow.main_loop.health_check import HealthCheckFailed
 from cylc.flow.network import API
 from cylc.flow.network.authentication import key_housekeeping
 from cylc.flow.network.server import WorkflowRuntimeServer
@@ -728,8 +731,8 @@ class Scheduler:
         except asyncio.CancelledError as exc:
             await self.handle_exception(exc)
 
-        except CylcError as exc:  # Includes SchedulerError
-            # catch "expected" errors
+        except (CylcError, HealthCheckFailed) as exc:
+            # catch "expected" errors (includes SchedulerError)
             await self.handle_exception(exc)
 
         except Exception as exc:
@@ -921,20 +924,25 @@ class Scheduler:
 
         * Called within the main loop.
         * Starts file installation when Remote init is complete.
-        * Removes complete installations or installations encountering SSH
-          error (remote init will take place on next job submission).
+        * Retries remote init/file install on SSH failure (255).
+        * Removes complete or fatally failed installations.
+        * The bad_hosts logic already handles unreachable hosts.
         """
         for install_target, platform in list(self.incomplete_ri_map.items()):
-            status = self.task_job_mgr.task_remote_mgr.remote_init_map[
-                install_target]
+            remote_mgr = self.task_job_mgr.task_remote_mgr
+            status = remote_mgr.remote_init_map[install_target]
             if status == REMOTE_INIT_DONE:
-                self.task_job_mgr.task_remote_mgr.file_install(platform)
-            if status in [REMOTE_FILE_INSTALL_DONE,
-                          REMOTE_INIT_255,
-                          REMOTE_FILE_INSTALL_255,
-                          REMOTE_INIT_FAILED,
-                          REMOTE_FILE_INSTALL_FAILED]:
-                # Remove install target
+                remote_mgr.file_install(platform)
+            elif status == REMOTE_INIT_255:
+                # Remote init failed due to unreachable host, retry.
+                remote_mgr.remote_init(platform)
+            elif status == REMOTE_FILE_INSTALL_255:
+                # File install failed due to unreachable host, retry.
+                remote_mgr.file_install(platform)
+            elif status in [REMOTE_FILE_INSTALL_DONE,
+                            REMOTE_INIT_FAILED,
+                            REMOTE_FILE_INSTALL_FAILED]:
+                # Complete or fatally failed, remove install target.
                 self.incomplete_ri_map.pop(install_target)
 
     def _load_task_run_times(self, row_idx, row):
@@ -996,7 +1004,12 @@ class Scheduler:
         warn = ""
         for tm in unprocessed_messages:
             job_tokens = self.tokens.duplicate(tm.job_id)
-            tdef = self.config.get_taskdef(job_tokens['task'])
+            try:
+                tdef = self.config.get_taskdef(job_tokens['task'])
+            except WorkflowConfigError as exc:
+                LOG.error(exc)
+                warn += f'\n  {tm.job_id}: {tm.severity} - "{tm.message}"'
+                continue
             if not self.task_events_mgr.process_job_message(
                 job_tokens, tdef, tm.message, tm.event_time
             ):
@@ -1713,7 +1726,6 @@ class Scheduler:
                 self.is_restart_timeout_wait = False
 
         if has_updated or self.data_store_mgr.updates_pending:
-            # Update the datastore.
             await self.update_data_structure()
 
         if has_updated:
@@ -1766,7 +1778,7 @@ class Scheduler:
         if (elapsed >= self.INTERVAL_MAIN_LOOP or
                 quick_mode and elapsed >= self.INTERVAL_MAIN_LOOP_QUICK):
             # Main loop has taken quite a bit to get through
-            # Still yield control to other threads by sleep(0.0)
+            # Still yield control to other async tasks by sleep(0)
             duration: float = 0
         elif quick_mode:
             duration = self.INTERVAL_MAIN_LOOP_QUICK - elapsed
@@ -1864,9 +1876,10 @@ class Scheduler:
             # Suppress the reason for shutdown, which is logged separately
             exc.__suppress_context__ = True
             if isinstance(exc, CylcError):
-                LOG.error(f"{exc.__class__.__name__}: {exc}")
-                if cylc.flow.flags.verbosity > 1:
-                    LOG.exception(exc)
+                LOG.error(
+                    f"{type(exc).__name__}: {exc}",
+                    exc_info=(exc if cylc.flow.flags.verbosity > 1 else None)
+                )
             else:
                 LOG.exception(exc)
             # Re-raise exception to be caught higher up (sets the exit code)
@@ -1930,9 +1943,16 @@ class Scheduler:
             fname = workflow_files.get_contact_file_path(self.workflow)
             try:
                 os.unlink(fname)
+            except FileNotFoundError as exc:
+                LOG.warning(
+                    f"contact file missing on shutdown: {fname}",
+                    exc_info=(exc if cylc.flow.flags.verbosity > 1 else None)
+                )
             except OSError as exc:
-                LOG.warning(f"failed to remove workflow contact file: {fname}")
-                LOG.exception(exc)
+                LOG.critical(
+                    f"failed to remove workflow contact file: {fname}",
+                    exc_info=exc,
+                )
             else:
                 # Useful to identify that this Scheduler has shut down
                 # properly (e.g. in tests):
@@ -1950,6 +1970,7 @@ class Scheduler:
     def _log_shutdown_reason(self, reason: BaseException) -> None:
         """Appropriately log the reason for scheduler shutdown."""
         shutdown_msg = "Workflow shutting down"
+        exc_info = reason if cylc.flow.flags.verbosity > 1 else None
         with patch_log_level(LOG):
             if isinstance(reason, SchedulerStop):
                 LOG.info(f'{shutdown_msg} - {reason.args[0]}')
@@ -1963,11 +1984,14 @@ class Scheduler:
                 isinstance(reason, ParsecError) and reason.schd_expected
             ):
                 LOG.error(
-                    f"{shutdown_msg} - {type(reason).__name__}: {reason}"
+                    f"{shutdown_msg} - {type(reason).__name__}: {reason}",
+                    exc_info=exc_info,
                 )
-                if cylc.flow.flags.verbosity > 1:
-                    # Print traceback
-                    LOG.exception(reason)
+            elif isinstance(reason, HealthCheckFailed):
+                LOG.critical(
+                    f"{shutdown_msg} - health check failed: {reason}",
+                    exc_info=exc_info,
+                )
             else:
                 LOG.exception(reason)
                 if str(reason):

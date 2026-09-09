@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -36,7 +37,6 @@ from cylc.flow.parsec.validate import cylc_config_validate
 def before_each():
     """Reset global state before every test."""
     flags.verbosity = 0
-    flags.cylc7_back_compat = False
     LOG.setLevel(logging.NOTSET)
     # Reset graph node parser singleton:
     GraphNodeParser.get_inst().clear()

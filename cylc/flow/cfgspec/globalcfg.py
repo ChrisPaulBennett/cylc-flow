@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -1401,6 +1402,25 @@ with Conf('global.cylc', desc='''
 
                         .. versionadded:: {versionadded}
                     """)
+    with Conf('template variables', desc='''
+        Define template variables for all workflows.
+
+        Any template variables defined here will be made available to all
+        workflows. Use this to define site-specific things.
+        Workflow-specific template variables can be set via ``--set`` and
+        ``--set-file`` options to workflow parsing commands, or in a
+        ``rose-suite.conf`` file via the cylc-rose plugin.
+
+        .. versionadded:: 8.7.0
+    '''):
+        Conf('<key>', VDR.V_TEMPLATE_VARIABLE, 'None', desc='''
+            A template variable in Python syntax.
+
+            .. rubric:: Examples:
+
+            * ``SITE = "my-site"``
+            * ``PLATFORMS = {"hpc": "my-hpc", "cluster": "my-cluster}``
+        ''')
     with Conf('platforms', desc='''
         Platforms allow you to define compute resources available at your
         site.
@@ -1417,10 +1437,6 @@ with Conf('global.cylc', desc='''
             '<platform name>',
             desc=dedent('''
             Configuration defining a platform.
-
-            Many of these settings have replaced those of the same name from
-            the old Cylc 7 ``suite.rc[runtime][<namespace>][job]/[remote]``
-            and ``global.rc[hosts][<host>]`` sections.
 
             Platform names can be regular expressions: If you have a set of
             compute resources such as ``bigmachine1, bigmachine2`` or
@@ -1452,6 +1468,13 @@ with Conf('global.cylc', desc='''
                   [platforms]
                       [[localhost|cylc-server-..]]  # error
                       [[localhost, cylc-server-..]]  # ok
+
+            .. versionchanged:: 8.0.0
+
+               Many of these settings have replaced those of the same name
+               from the old Cylc 7
+               ``suite.rc[runtime][<namespace>][job]/[remote]``
+               and ``global.rc[hosts][<host>]`` sections.
 
             .. seealso::
 
@@ -1496,6 +1519,38 @@ with Conf('global.cylc', desc='''
 
                      The default value is the standard
                      location for cgroups on linux and should work in
+                     most circumstances
+                     ''')
+                Conf('polling interval', VDR.V_INTERVAL,
+                     default="PT10S",
+                     desc='''
+                     Configure the profiler polling interval.
+
+                     The interval at which the profiler will
+                     poll the cgroups filesystem for resource usage data.
+                     The default value of 10 seconds should be sufficient for
+                     most use cases, but can be adjusted as needed.
+                ''')
+
+
+            with Conf('profiler', desc='''
+                Configure the Cylc job profiler.
+
+                This tool can capture CPU and memory information from
+                job runners which use cgroups such as PBS and Slurm.
+
+                .. versionadded:: 8.7.0
+            '''):
+                Conf('activate', VDR.V_BOOLEAN, False, desc='''
+                    Enable the Cylc profiler for this platform.
+                ''')
+                Conf('cgroups path', VDR.V_STRING,
+                     default='/sys/fs/cgroup',
+                     desc='''
+                     Configure the path to the cgroups filesystem.
+
+                     The default value is the standard
+                     location for cgroups on Linux and should work in
                      most circumstances
                      ''')
                 Conf('polling interval', VDR.V_INTERVAL,
@@ -1694,8 +1749,8 @@ with Conf('global.cylc', desc='''
                    Cylc wrapper script rather than the ``cylc`` executable
                    itself.
 
-                   See :ref:`managing environments` for more information on
-                   the wrapper script.
+                   See :ref:`installation.distributed-installation` for more
+                   information on the wrapper script.
 
                 .. versionchanged:: 8.0.0
 

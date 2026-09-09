@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -45,7 +46,6 @@ from cylc.flow.exceptions import (
     CylcMissingFinalCyclePointError,
     CylcTimeSyntaxError,
 )
-import cylc.flow.flags
 
 if TYPE_CHECKING:
     from metomi.isodatetime.data import TimePoint
@@ -324,15 +324,6 @@ class CylcTimeParser:
                 LOG.warning(
                     "Cannot have more than 1 repetition for zero-duration "
                     f"recurrence {expression}."
-                )
-
-            if cylc.flow.flags.cylc7_back_compat and format_num == 1:
-                LOG.warning(
-                    f"The recurrence '{expression}' is unlikely to behave "
-                    "the same way as in Cylc 7 as that implementation was "
-                    "incorrect (see https://cylc.github.io/cylc-doc/stable/"
-                    "html/user-guide/writing-workflows/scheduling.html"
-                    "#format-1-r-limit-datetime-datetime)"
                 )
 
             return TimeRecurrence(

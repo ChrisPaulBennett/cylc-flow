@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -139,7 +140,7 @@ def mod_test_dir(request, ses_test_dir):
         # Shorten path by dropping `integration.` prefix:
         re.sub(r'^integration\.', '', request.module.__name__)
     )
-    path.mkdir(exist_ok=True)
+    path.mkdir(parents=True, exist_ok=True)
     yield path
     if _pytest_passed(request):
         # test passed -> remove all files

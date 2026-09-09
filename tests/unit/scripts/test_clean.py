@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,13 +17,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-from typing import Callable, List, Type, Union
+from typing import (
+    Callable,
+    Type,
+    Union,
+)
 
 import pytest
 
 from cylc.flow.exceptions import InputError
 from cylc.flow.scripts.clean import (
-    CleanOptions, _main, parse_timeout, scan, run
+    CleanOptions,
+    _main,
+    parse_timeout,
+    run,
+    scan,
 )
 
 
@@ -49,11 +58,11 @@ async def test_scan(tmp_run_dir):
 
 
 @pytest.fixture
-def mute(monkeypatch: pytest.MonkeyPatch) -> List[str]:
+def mute(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Stop cylc clean from doing anything and log all init_clean calls."""
     items = []
 
-    def _clean(id_, *_):
+    async def _clean(id_, *_):
         items.append(id_)
 
     monkeypatch.setattr('cylc.flow.scripts.clean.init_clean', _clean)
@@ -62,7 +71,7 @@ def mute(monkeypatch: pytest.MonkeyPatch) -> List[str]:
     return items
 
 
-async def test_multi(tmp_run_dir: Callable, mute: List[str]):
+async def test_multi(tmp_run_dir: Callable, mute: list[str]):
     """It supports cleaning multiple workflows."""
     # cli opts
     opts = CleanOptions()

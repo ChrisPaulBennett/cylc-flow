@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -28,6 +29,7 @@ from collections import deque
 from textwrap import dedent
 from typing import List, Dict, Any, Optional, Tuple
 
+from cylc.flow.parsec.util import ParsecDictConfig
 from metomi.isodatetime.data import Duration, TimePoint
 from metomi.isodatetime.dumpers import TimePointDumper
 from metomi.isodatetime.parsers import TimePointParser, DurationParser
@@ -142,9 +144,11 @@ class ParsecValidator:
         ),
         V_ABSOLUTE_HOST_LIST: (
             'absolute host list',
-            'A comma separated list of hostnames which does not contain '
-            'any self references '
-            f'(i.e. does not contain {", ".join(SELF_REFERENCE_PATTERNS)})',
+            (
+                'A comma separated list of hostnames which does not contain '
+                'any self references '
+                f'(i.e. does not contain {", ".join(SELF_REFERENCE_PATTERNS)})'
+            ),
             ['foo', 'bar', 'baz']
         )
     }
@@ -697,6 +701,7 @@ class CylcConfigValidator(ParsecValidator):
     V_INTERVAL = 'V_INTERVAL'
     V_INTERVAL_LIST = 'V_INTERVAL_LIST'
     V_PARAMETER_LIST = 'V_PARAMETER_LIST'
+    V_TEMPLATE_VARIABLE = 'V_TEMPLATE_VARIABLE'
     V_XTRIGGER = 'V_XTRIGGER'
 
     V_TYPE_HELP: dict = {
@@ -719,9 +724,11 @@ class CylcConfigValidator(ParsecValidator):
         ),
         V_CYCLE_POINT_FORMAT: (
             'cycle point format',
-            'An time format for date-time cycle points in ``isodatetime`` '
-            '"print" or "parse" format. '
-            'See ``isodatetime --help`` for more information.',
+            (
+                'A time format for date-time cycle points in ``isodatetime`` '
+                '"print" or "parse" format. '
+                'See ``isodatetime --help`` for more information.'
+            ),
             {
                 'CCYYMM': '``isodatetime`` print format.',
                 '%Y%m': '``isodatetime`` parse format.'
@@ -767,19 +774,22 @@ class CylcConfigValidator(ParsecValidator):
         ),
         V_INTERVAL_LIST: (
             'time interval list',
-            'A comma separated list of time intervals. '
-            'These can include multipliers.',
+            (
+                'A comma separated list of time intervals. '
+                'These can include multipliers.'
+            ),
             {
                 'P1Y, P2Y, P3Y': 'After 1, 2 and 3 years.',
-                'PT1M, 2*PT1H, P1D': 'After 1 minute, 1 hour, 1 hour and 1 '
-                'day'
+                'PT1M, 2*PT1H, P1D': 'After 1 minute, 1 hour, 1 hour and 1 day'
             },
             [('std:term', 'ISO8601 duration')]
         ),
         V_PARAMETER_LIST: (
             'parameter list',
-            'A comma separated list of Cylc parameter values. '
-            'This can include strings, integers and integer ranges.',
+            (
+                'A comma separated list of Cylc parameter values. '
+                'This can include strings, integers and integer ranges.'
+            ),
             {
                 'foo, bar, baz': 'List of string parameters.',
                 '1, 2, 3': 'List of integer parameters.',
@@ -789,11 +799,26 @@ class CylcConfigValidator(ParsecValidator):
             },
             [('ref', 'User Guide Param')]
         ),
+        V_TEMPLATE_VARIABLE: (
+            'template variable',
+            'A variable for use by Jinja2.',
+            {
+                '"Hello World!"': 'String',
+                '42': 'Integer',
+                '12.34': 'Float',
+                'True': 'Boolean',
+                '[1, 2]': 'List',
+                '(1, 2)': 'Tuple',
+                '{"a": 1, "b": 2}': 'Dictionary',
+            },
+            [('ref', 'jinja2-template-variables')],
+        ),
         V_XTRIGGER: (
             'xtrigger function signature',
-            'A function signature similar to how it would be written in '
-            'Python.\n'
-            '``<function>(<arg>, <kwarg>=<value>):<interval>``',
+            (
+                'A function signature similar to how it would be written in '
+                'Python.\n``<function>(<arg>, <kwarg>=<value>):<interval>``'
+            ),
             {
                 'mytrigger(42, cycle_point=%(point)):PT10S':
                     'Run function ``mytrigger`` every 10 seconds.'
@@ -814,6 +839,7 @@ class CylcConfigValidator(ParsecValidator):
             self.V_INTERVAL: self.coerce_interval,
             self.V_INTERVAL_LIST: self.coerce_interval_list,
             self.V_PARAMETER_LIST: self.coerce_parameter_list,
+            self.V_TEMPLATE_VARIABLE: self.coerce_template_variable,
             self.V_XTRIGGER: self.coerce_xtrigger,
         })
 
@@ -1220,6 +1246,18 @@ class CylcConfigValidator(ParsecValidator):
                     # Leave as string.
                     val = cls.strip_and_unquote([], value)
         return val
+
+    @classmethod
+    def coerce_template_variable(cls, value, keys):
+        # bypass circular import problem
+        from cylc.flow.templatevars import eval_var
+        ret = eval_var(value.strip())
+        if isinstance(ret, dict):
+            # NOTE: Parsec interprets dictionaries as configuration sections,
+            # so we must cast any dict values to a special type to allow them
+            # through.
+            ret = ParsecDictConfig(ret)
+        return ret
 
 
 class BroadcastConfigValidator(CylcConfigValidator):

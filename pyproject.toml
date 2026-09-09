@@ -42,8 +42,7 @@ dependencies = [
     "colorama>=0.4,<1",
     "graphql-core>=3.2,<3.3",
     "graphene>=3.4.0,<3.5",
-    # Note: can't pin jinja2 any higher than this until we give up on Cylc 7 back-compat
-    "jinja2==3.0.*",
+    "jinja2>=3.1",
     "metomi-isodatetime>=1!3.0.0,<1!3.2.0",
     # Constrain protobuf version for compatible Scheduler-UIS comms across hosts
     "packaging",
@@ -51,7 +50,7 @@ dependencies = [
     "psutil>=5.6.0",
     "pyzmq>=22",
     # NOTE: exclude two urwid versions that were not compatible with Tui
-    "urwid>=2.2,!=2.6.2,!=2.6.3,<4",
+    "urwid>=2.2,!=2.6.2,!=2.6.3,<5",
 ]
 dynamic = ["version"]
 
@@ -74,7 +73,7 @@ main_loop-log_db = [
     "sqlparse",
 ]
 report-timings = [
-    "pandas==2.*",
+    "pandas>=2,<4",
     "matplotlib",
 ]
 tests = [
@@ -87,7 +86,8 @@ tests = [
     "flake8-builtins>=1.5.0",
     "flake8-comprehensions>=3.5.0",
     "flake8-debugger>=4.0.0",
-    "flake8-implicit-str-concat>=0.4",
+    # https://github.com/flake8-implicit-str-concat/flake8-implicit-str-concat/issues/82
+    "flake8-implicit-str-concat>=0.4,!=0.7.0",
     "flake8-mutable>=1.2.0",
     "flake8-simplify>=0.14.0; python_version<'3.14'",
     "flake8-type-checking",
@@ -185,9 +185,10 @@ log_tracemalloc = "cylc.flow.main_loop.log_tracemalloc"
 # NOTE: all entry points should be listed here even if Cylc Flow does not
 # provide any implementations, to make entry point scraping easier
 [project.entry-points."cylc.pre_configure"]
+global_template_variables = "cylc.flow.plugins.global_template_variables:pre_configure"
 
 [project.entry-points."cylc.post_install"]
-log_vc_info = "cylc.flow.install_plugins.log_vc_info:main"
+log_vc_info = "cylc.flow.plugins.log_vc_info:main"
 
 [project.entry-points."cylc.xtriggers"]
 # NOTE: Built-in xtrigger modules

@@ -1,5 +1,6 @@
 # THIS FILE IS PART OF THE CYLC WORKFLOW ENGINE.
-# Copyright (C) NIWA & British Crown (Met Office) & Contributors.
+# Copyright (C) Earth Sciences New Zealand & British Crown (Met Office)
+# & Contributors.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -148,6 +149,9 @@ async def _start_flow(
 
     await schd.install()
 
+    # Speed up main loop
+    schd.INTERVAL_MAIN_LOOP = schd.INTERVAL_MAIN_LOOP_QUICK = 1e-4
+
     try:
         # Nested `try...finally` to ensure caplog always yielded even if
         # exception occurs in Scheduler
@@ -177,6 +181,9 @@ async def _run_flow(
         caplog.set_level(level, CYLC_LOG)
 
     await schd.install()
+
+    # Speed up main loop
+    schd.INTERVAL_MAIN_LOOP = schd.INTERVAL_MAIN_LOOP_QUICK = 1e-4
 
     task: Optional[asyncio.Task] = None
     try:
