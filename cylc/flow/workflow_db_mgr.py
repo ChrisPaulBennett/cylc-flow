@@ -25,6 +25,7 @@ This module provides the logic to:
 """
 
 from collections import defaultdict
+from contextlib import contextmanager
 import json
 import os
 from shutil import (
@@ -39,6 +40,7 @@ from typing import (
     AnyStr,
     DefaultDict,
     Dict,
+    Iterator,
     List,
     Optional,
     Set,
@@ -168,6 +170,34 @@ class WorkflowDatabaseManager:
         self.db_updates_map: DefaultDict[
             str, List[DbUpdateTuple]
         ] = defaultdict(list)
+        # >0 if DB commits are being deferred (see batch_ops)
+        self._batch_depth = 0
+
+    @contextmanager
+    def batch_ops(self) -> Iterator[None]:
+        """Defer DB commits until the end of the block.
+
+        Use this when performing many operations in quick succession which
+        would otherwise flush (and commit) DB writes many times over (e.g,
+        "cylc set" on a large number of tasks).
+
+        Within this block, calls to "process_queued_ops" will still execute
+        queued operations against the private DB so that subsequent reads
+        reflect the truth, however, the transaction will not be committed
+        until the end of the block. Operations for the public DB are stashed
+        (preserving order) and executed in a single transaction at the end
+        of the block.
+
+        This can be nested, the operations will be committed on exit of the
+        outermost block.
+        """
+        self._batch_depth += 1
+        try:
+            yield
+        finally:
+            self._batch_depth -= 1
+            if not self._batch_depth:
+                self.process_queued_ops()
 
     def copy_pri_to_pub(self) -> None:
         """Copy content of primary database file to public database file."""
@@ -284,6 +314,11 @@ class WorkflowDatabaseManager:
         # thread/process, if writing to it becomes a bottleneck. At the moment,
         # there is no evidence that this is a bottleneck, so it is better to
         # keep the logic simple.
+        if self._batch_depth:
+            # Defer commits until the end of the batch (see batch_ops).
+            self.pri_dao.execute_queued_items(commit=False)
+            self.pub_dao.stash_queued_items()
+            return
         self.pri_dao.execute_queued_items()
         self.pub_dao.execute_queued_items()
 

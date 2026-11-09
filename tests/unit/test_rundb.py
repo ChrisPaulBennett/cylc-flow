@@ -238,3 +238,92 @@ def test_select_task_outputs__identical_outputs():
             (outputs_str, {1}),
             (outputs_str, set()),
         ]
+
+
+def _count_rows(db_file: Path, table: str) -> int:
+    """Count rows in a table using an independent connection."""
+    conn = sqlite3.connect(db_file)
+    try:
+        return conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_execute_queued_items_no_commit(tmp_path: Path):
+    """It should defer commits when commit=False.
+
+    Statements should be visible to reads made via the same DAO, but not to
+    other connections, until committed.
+    """
+    db_file = tmp_path / 'db'
+    table = CylcWorkflowDAO.TABLE_WORKFLOW_PARAMS
+    with CylcWorkflowDAO(db_file, create_tables=True) as dao:
+        for key in ('a', 'b'):
+            dao.add_insert_item(table, {'key': key, 'value': key})
+            dao.execute_queued_items(commit=False)
+            # the connection is kept open
+            assert dao.conn is not None
+            # the queue is cleared
+            assert not dao.tables[table].insert_queue
+
+        # visible to this DAO
+        assert {
+            row[0] for row in dao.connect().execute(f'SELECT key FROM {table}')
+        } == {'a', 'b'}
+        # not visible to other connections
+        assert _count_rows(db_file, table) == 0
+
+        # commit
+        dao.execute_queued_items()
+        assert dao.conn is None
+        assert _count_rows(db_file, table) == 2
+
+
+def test_stash_queued_items(tmp_path: Path):
+    """It should execute stashed items, in order, on the next execution."""
+    db_file = tmp_path / 'db'
+    table = CylcWorkflowDAO.TABLE_WORKFLOW_PARAMS
+    with CylcWorkflowDAO(db_file, create_tables=True) as dao:
+        # insert a row then delete it in separate batches
+        dao.add_insert_item(table, {'key': 'a', 'value': '1'})
+        dao.stash_queued_items()
+        dao.add_delete_item(table, {'key': 'a'})
+        dao.stash_queued_items()
+        # then insert another row
+        dao.add_insert_item(table, {'key': 'b', 'value': '2'})
+        dao.stash_queued_items()
+
+        # nothing should have been executed yet
+        assert _count_rows(db_file, table) == 0
+        assert len(dao.stashed_sql_queue) == 3
+
+        dao.execute_queued_items()
+        assert not dao.stashed_sql_queue
+        # the order of operations should have been preserved
+        # (if the delete was executed before the insert, the row would remain)
+        assert list(
+            dao.connect().execute(f'SELECT key, value FROM {table}')
+        ) == [('b', '2')]
+
+
+def test_stash_queued_items_retry(tmp_path: Path, monkeypatch):
+    """Stashed items should be retained for retry if the public DB fails."""
+    db_file = tmp_path / 'db'
+    table = CylcWorkflowDAO.TABLE_WORKFLOW_PARAMS
+    with CylcWorkflowDAO(db_file, is_public=True, create_tables=True) as dao:
+        dao.add_insert_item(table, {'key': 'a', 'value': '1'})
+        dao.stash_queued_items()
+
+        def _execute_stmt(*args):
+            raise sqlite3.OperationalError('locked')
+
+        with monkeypatch.context() as mp:
+            mp.setattr(dao, '_execute_stmt', _execute_stmt)
+            dao.execute_queued_items()
+        assert dao.n_tries == 1
+        assert len(dao.stashed_sql_queue) == 1
+
+        dao.execute_queued_items()
+        assert dao.n_tries == 0
+        assert not dao.stashed_sql_queue
+        assert _count_rows(db_file, table) == 1

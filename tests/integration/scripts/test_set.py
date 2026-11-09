@@ -21,6 +21,7 @@ Note: see also functional tests
 """
 
 from secrets import token_hex
+import sqlite3
 from typing import Callable
 
 import pytest
@@ -534,3 +535,73 @@ async def test_set_clears_modifiers(flow, scheduler, start):
         assert task_a.state.is_held is False
         assert task_a_data_store.is_retry is False
         assert task_a_data_store.is_retry is False
+
+
+async def test_set_batches_db_commits(
+    flow,
+    scheduler,
+    start,
+    monkeypatch,
+):
+    """Setting many tasks should commit DB writes once, not once per task.
+
+    See https://github.com/cylc/cylc-flow/issues/7183
+    """
+    n_tasks = 20
+    tasks = [f'a{i}' for i in range(n_tasks)]
+    id_ = flow({
+        'scheduling': {
+            'initial cycle point': '1',
+            'cycling mode': 'integer',
+            'graph': {
+                'P1': '\n'.join(f'{t}[-P1] => {t} => b' for t in tasks)
+            },
+        },
+    })
+    schd: Scheduler = scheduler(id_)
+    async with start(schd):
+        # count the commits made to each DB
+        commits = {'pri': 0, 'pub': 0}
+        for key in commits:
+            dao = getattr(schd.workflow_db_mgr, f'{key}_dao')
+
+            def _wrap(_orig, _key):
+                def _execute_queued_items(commit=True):
+                    if commit:
+                        commits[_key] += 1
+                    return _orig(commit=commit)
+                return _execute_queued_items
+
+            monkeypatch.setattr(
+                dao,
+                'execute_queued_items',
+                _wrap(dao.execute_queued_items, key),
+            )
+
+        await run_cmd(
+            set_prereqs_and_outputs(schd, [f'1/{task}' for task in tasks], [])
+        )
+
+        # one commit per DB for the whole operation
+        assert commits == {'pri': 1, 'pub': 1}
+
+        # all outputs should have been recorded in both DBs
+        expected = {(task, TASK_STATUS_SUCCEEDED) for task in tasks}
+        for db_path in (
+            schd.workflow_db_mgr.pri_path,
+            schd.workflow_db_mgr.pub_path,
+        ):
+            conn = sqlite3.connect(db_path)
+            try:
+                rows = conn.execute(
+                    'SELECT name, status FROM task_states WHERE cycle = 1'
+                ).fetchall()
+            finally:
+                conn.close()
+            assert {row for row in rows if row[0] in tasks} == expected
+
+        # the downstream task should have been spawned with all prereqs
+        # satisfied
+        b = schd.pool.get_task(IntegerPoint('1'), 'b')
+        assert b is not None
+        assert b.prereqs_are_satisfied()

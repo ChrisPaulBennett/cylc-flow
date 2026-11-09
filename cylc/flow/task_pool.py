@@ -2006,8 +2006,46 @@ class TaskPool:
         if flow != [FLOW_NONE] and not flow_nums:
             flow_nums = self._get_active_flow_nums()
 
+        # Defer DB commits until all tasks have been set, committing once per
+        # task is very slow for large numbers of tasks.
+        # See https://github.com/cylc/cylc-flow/issues/7183
+        with self.workflow_db_mgr.batch_ops():
+            warnings_flow_none = self._set_prereqs_and_outputs(
+                matched,
+                outputs,
+                prereqs,
+                flow,
+                flow_nums,
+                flow_wait,
+                set_all,
+                clean_pre,
+                clean_xtr,
+            )
+
+        if warnings_flow_none:
+            msg = '\n  * '.join(warnings_flow_none)
+            LOG.warning(f"Already active - ignoring no-flow set: \n  * {msg}")
+
+    def _set_prereqs_and_outputs(
+        self,
+        matched: 'Iterable[TaskTokens]',
+        outputs: List[str],
+        prereqs: List[str],
+        flow: List[str],
+        flow_nums: 'FlowNums',
+        flow_wait: bool,
+        set_all: bool,
+        clean_pre: 'Set[PrereqTuple]',
+        clean_xtr: 'Dict[str, bool]',
+    ) -> List[str]:
+        """Helper for set_prereqs_and_outputs.
+
+        Returns:
+            List of warnings for active tasks ignored due to --flow=none.
+
+        """
         # Set active tasks.
-        warnings_flow_none = []
+        warnings_flow_none: List[str] = []
         for id_ in matched:
             itask = self._get_task_by_id(id_.relative_id)
             if itask:
@@ -2062,9 +2100,7 @@ class TaskPool:
                     if trans:
                         self._set_outputs_itask(trans, outputs)
 
-        if warnings_flow_none:
-            msg = '\n  * '.join(warnings_flow_none)
-            LOG.warning(f"Already active - ignoring no-flow set: \n  * {msg}")
+        return warnings_flow_none
 
     def _get_valid_prereqs(
         self, prereqs: Set[PrereqTuple], tdef: 'TaskDef', point: 'PointBase'

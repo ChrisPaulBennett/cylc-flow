@@ -391,6 +391,8 @@ class CylcWorkflowDAO:
         self.is_public = is_public
         self.conn: Optional[sqlite3.Connection] = None
         self.n_tries = 0
+        # statements stashed for later execution (see stash_queued_items)
+        self.stashed_sql_queue: List[Tuple[str, list]] = []
 
         self.tables = {
             name: CylcWorkflowDAOTable(name, attrs)
@@ -473,10 +475,14 @@ class CylcWorkflowDAO:
         if cur is not None:
             self.conn.commit()
 
-    def execute_queued_items(self):
-        """Execute queued items for each table."""
-        # determine the sql statements to execute
-        sql_queue = []  # (sql_statement, values)
+    def _get_queued_stmts(self) -> List[Tuple[str, list]]:
+        """Return the SQL statements for the queued items of each table.
+
+        Returns:
+            List of (sql_statement, [stmt_args, ...]) tuples.
+
+        """
+        sql_queue: List[Tuple[str, list]] = []
         for table in self.tables.values():
             # DELETE statements may have varying number of WHERE args so we
             # can only executemany for each identical template statement.
@@ -496,19 +502,69 @@ class CylcWorkflowDAO:
             # statement.
             for stmt, stmt_args_list in table.update_queues.items():
                 sql_queue.append((stmt, stmt_args_list))
+        return sql_queue
+
+    def _clear_queues(self) -> None:
+        """Clear the queued items for each table."""
+        for table in self.tables.values():
+            table.delete_queues.clear()
+            table.insert_queue.clear()
+            table.update_queues.clear()
+
+    def stash_queued_items(self) -> None:
+        """Stash the currently queued items for later execution.
+
+        This allows many batches of DB operations to be executed in a single
+        transaction (on the next call to "execute_queued_items") whilst
+        preserving the order in which the batches were queued.
+        """
+        self.stashed_sql_queue.extend(
+            # NOTE: copy the args lists as the queues are cleared in-place
+            (stmt, list(stmt_args))
+            for stmt, stmt_args in self._get_queued_stmts()
+        )
+        self._clear_queues()
+
+    def execute_queued_items(self, commit: bool = True) -> None:
+        """Execute queued items for each table.
+
+        Any items previously stashed (see "stash_queued_items") are executed
+        first.
+
+        Args:
+            commit:
+                If True, commit the transaction and close the connection.
+
+                If False, the statements are executed but the transaction is
+                left open (and the connection with it). Subsequent reads
+                made via this object will see the results of these
+                statements (as they share the same connection). The
+                transaction will be committed on the next call with
+                commit=True. This is intended for the private database
+                where it saves the overhead of a commit (and reconnection)
+                for each batch of operations when performing many in quick
+                succession.
+
+        """
+        # determine the sql statements to execute
+        # (sql_statement, values)
+        sql_queue = [*self.stashed_sql_queue, *self._get_queued_stmts()]
 
         # execute the statements and commit the transaction
+        close = commit
         try:
             for stmt, stmt_args in sql_queue:
                 self._execute_stmt(stmt, stmt_args)
             # Connection should only be opened if we have executed something.
             if self.conn is None:
                 return
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
 
         # something went wrong
         # (includes DB file not found, transaction processing issue, db locked)
         except sqlite3.Error as e:
+            close = True
             # Detailed error codes are only available for python >= 3.11
             if hasattr(e, "sqlite_errorcode"):
                 error_code = str(e.sqlite_errorcode)
@@ -556,24 +612,27 @@ class CylcWorkflowDAO:
                     self.conn.rollback()
             return
 
+        except BaseException:
+            close = True
+            raise
+
         else:
             # Clear the queues
-            for table in self.tables.values():
-                table.delete_queues.clear()
-                table.insert_queue.clear()
-                table.update_queues.clear()
+            self.stashed_sql_queue.clear()
+            self._clear_queues()
             # Report public database retry recovery if necessary
-            if self.n_tries:
+            if commit and self.n_tries:
                 LOG.info(
                     "%(file)s: recovered after (%(attempt)d) attempt(s)\n" % {
                         "file": self.db_file_name, "attempt": self.n_tries})
-            self.n_tries = 0
+                self.n_tries = 0
 
         finally:
             # Note: This is not strictly necessary. But if the workflow run
             # directory is removed, a forced reconnection to the private
             # database will ensure that the workflow dies.
-            self.close()
+            if close:
+                self.close()
 
     def _execute_stmt(self, stmt, stmt_args_list):
         """Helper for "self.execute_queued_items".
